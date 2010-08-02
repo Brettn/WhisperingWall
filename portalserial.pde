@@ -24,7 +24,15 @@
 #include "PgmPrint.h"
 #include <ctype.h>
 #include <EEPROM.h>
-
+/**
+ *This sketch records and plays back sound files.  Up to 256 sound files will
+ * play back at random.  When the record button is held down, the sketch will 
+ *stop any playback that is in process and record for as long as the button 
+ *remains pressed.  After the button is released, the recording stops and the 
+ *new file is immediatly played back.  The sketch then resumes playing random 
+ *files.  Once 256 messages have been recorded, any aditional messages will be 
+ *recorded by first deleting the oldest recording.
+*/
 /**
  * Example Arduino record/play sketch for the Adafruit Wave Shield.
  * For best results use Wave Shield version 1.1 or later.
@@ -71,13 +79,13 @@ int16_t lastTrack = -1; // Highest track number
 uint8_t trackList[32];  // bit list of used tracks
 
 
-int prevTrack_addr = 0;
-int totalTrack_addr = 1;
-int prevTrack;
-int totalTrack;
-int record_LED = 6;  //pin # for green "Record" LED
-int standby_LED = 9;  //pin # for "Standby" LED
-int record_button = 8;  //pin # for "Record" button
+int currentTrack_addr = 0;    //eeprom address to store the most recent track recorded
+int totalTrack_addr = 1;   //eeprom address to store the total number of tracks recorded
+int currentTrack;             //stores most recent track recorded(0-255)
+int totalTrack;            //stores total number of tracks recorded(0-255)
+int record_LED = 6;        //pin # for green "Record" LED
+int standby_LED = 9;       //pin # for "Standby" LED
+int record_button = 8;     //pin # for "Record" button
 int delete_all_files = 7;  //pin # for jumper to erase all files
 //------------------------------------------------------------------------------
 // print error message and halt
@@ -171,10 +179,13 @@ void nag(void)
 // check for pause resume
 void pauseResume(void)
 {
+  //stop recording if the record button is released
   if ((digitalRead(record_button) == LOW) && (wave.isRecording())) wave.stop();
+  //stop playing sound files when the button is pressed
   else if ((digitalRead(record_button) == HIGH) && (wave.isPlaying())) wave.stop();
 
-
+//****The following is commented out; it used to require computer serial input
+//****in order to control the recording and playback.
 //  else
 //  {
 //  
@@ -344,6 +355,8 @@ void scanRoot(void)
 void trackClear(void)
 {
   char name[13];
+//****The following is commented out so that computer serial communications is not
+//****needed to confirm file deletions
 //  PgmPrintln("Type Y to delete all tracks!");
 //  Serial.flush();
 //  while (!Serial.available());
@@ -368,6 +381,8 @@ void trackDelete(uint8_t n)
 {
   char name[13];
   if (!trackName(n, name)) return;
+//****The following is commented out so that computer serial communications is not
+//****needed to confirm file deletion
 //  PgmPrint("Type y to delete: "); 
 //  Serial.println(name);
 //  Serial.flush();
@@ -429,23 +444,23 @@ void setup(void)
   if (!root.openRoot(vol)) error("openRoot");
   nag(); // nag user about power and SD card
   
-  pinMode(6, OUTPUT);  //"start recording" LED
-  pinMode(7, INPUT);  //reset eeprom counters
+  pinMode(record_LED, OUTPUT);  //"start recording" LED
+  pinMode(delete_all_files, INPUT);  //reset eeprom counters(esentially deletes all files)
   pinMode(record_button, INPUT);  //record button...high == pushed
-  pinMode(9, OUTPUT);  //"busy" LED
+  pinMode(standby_LED, OUTPUT);  //"busy" LED
   
-  digitalWrite(standby_LED, LOW);
-  digitalWrite(record_LED, LOW);
+  digitalWrite(standby_LED, LOW);  //turn LED off
+  digitalWrite(record_LED, LOW);  //turn LED off
   trackClear();
   if (digitalRead(delete_all_files) == HIGH)  //reset track counters(old files will not play)
   {
-    EEPROM.write(prevTrack_addr, 0);
-    EEPROM.write(totalTrack_addr, 0);
+    EEPROM.write(currentTrack_addr, 0);  //resets previous track recorded value to 0
+    EEPROM.write(totalTrack_addr, 0); //rests total tracks played to 0
     
     
   }
-  prevTrack = EEPROM.read(prevTrack_addr);
-  totalTrack = EEPROM.read(totalTrack_addr);
+  currentTrack = EEPROM.read(currentTrack_addr);  //retrive previous track recorded from eeprom
+  totalTrack = EEPROM.read(totalTrack_addr);  //retrieve total tracks recorded from eeprom
   Serial.print("\ntotalTrack: ");
   Serial.println(totalTrack);
 
@@ -455,40 +470,39 @@ void setup(void)
 void loop()
 {
    
-    if (digitalRead(record_button) == HIGH)
+    if (digitalRead(record_button) == HIGH)  //if button pressed...
     {   
-      digitalWrite(standby_LED, HIGH);
-      trackDelete(prevTrack);
-      trackRecord(prevTrack);
+      digitalWrite(standby_LED, HIGH);  //turn on "Standby" LED
+      trackDelete(currentTrack);  //delete any file in current recording location
+      trackRecord(currentTrack);  //record new file in current location
       digitalWrite(record_LED, LOW);  //turn off "Ready to Record" LED
       digitalWrite(standby_LED, HIGH);  //turn on "Standby" LED
       delay(500);
-      trackPlay(prevTrack);
-      prevTrack = prevTrack + 1;
-      if (prevTrack > 255) prevTrack = 0;
-      EEPROM.write(prevTrack_addr, prevTrack);
-      if (totalTrack < 255)
+      trackPlay(currentTrack);  //playback latest recording
+      currentTrack = currentTrack + 1;  //advance current track pointer
+      if (currentTrack > 255) currentTrack = 0;  //points back to the first location after 256 recordings
+      EEPROM.write(currentTrack_addr, currentTrack);  //update eeprom value
+      if (totalTrack < 255)  //increments up to 255, then stops
       {
-        totalTrack = totalTrack + 1;
-        EEPROM.write(totalTrack_addr, totalTrack);
+        totalTrack = totalTrack + 1;  //increment total tracks recorded
+        EEPROM.write(totalTrack_addr, totalTrack);  //update eeprom value
       }
-      digitalWrite(standby_LED, LOW);  //turn off "Standby" LED
+      digitalWrite(standby_LED, LOW);  //turn off "Standby" LED 
     }
-   // uint16_t random_track = random(prevTrack + 1);
    for (int i = 0; i < 12; i++)  // delay 3 seconds between playing each track
    {
      delay(250);  //pause 1/4 second
      if (digitalRead(record_button) == HIGH) i = 12;  //jump out of loop early if button is pressed
    }
-   if ((totalTrack > 0) && (digitalRead(record_button) == LOW)) 
+   if ((totalTrack > 0) && (digitalRead(record_button) == LOW)) //don't playback if there are no files
    {
-     trackPlay(random(totalTrack));
+     trackPlay(random(totalTrack));  //choose & play a random sound file
      Serial.print("\ntotalTrack: ");
      Serial.println(totalTrack);
    }
   
   
-  
+//****Original code is commented out but left for reference  
 //  // insure file is closed
 //  if (file.isOpen()) file.close();
 //  // scan root dir to build track list and set lastTrack
